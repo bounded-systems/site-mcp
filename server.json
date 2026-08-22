@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.bounded-systems/site-mcp",
   "description": "Read-only MCP server over robertdelanghe.dev's Sigstore-verified static API (stdio).",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "websiteUrl": "https://robertdelanghe.dev",
   "repository": {
     "url": "https://github.com/bounded-systems/site-mcp",
@@ -12,7 +12,7 @@
     {
       "registryType": "npm",
       "identifier": "@bounded-systems/site-mcp",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "runtimeHint": "npx",
       "transport": { "type": "stdio" },
       "environmentVariables": [

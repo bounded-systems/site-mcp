@@ -36,12 +36,17 @@ jobs:
           pkg=$(jq -r .version package.json)
           deno=$(jq -r .version deno.json)
           srv=$(jq -r .version server.json)
+          # server.json carries the version TWICE: its own, and the npm version the
+          # MCP Registry entry tells clients to install. Only the first was checked,
+          # so a release could ship a 0.3.0 registry entry pointing at 0.2.0 on npm —
+          # silently serving the previous build to every client that found it there.
+          srvpkg=$(jq -r '.packages[0].version' server.json)
           # workflow_dispatch has no tag; fall back to package.json in that case.
           tag="${GITHUB_REF_NAME#v}"
           case "$GITHUB_REF" in refs/tags/*) ;; *) tag="$pkg" ;; esac
-          echo "package.json=$pkg deno.json=$deno server.json=$srv tag=$tag"
-          if [ "$pkg" != "$deno" ] || [ "$pkg" != "$srv" ] || [ "$pkg" != "$tag" ]; then
-            echo "::error::version mismatch — keep package.json, deno.json, server.json and the v<version> tag in sync"
+          echo "package.json=$pkg deno.json=$deno server.json=$srv server.json:packages[0]=$srvpkg tag=$tag"
+          if [ "$pkg" != "$deno" ] || [ "$pkg" != "$srv" ] || [ "$pkg" != "$srvpkg" ] || [ "$pkg" != "$tag" ]; then
+            echo "::error::version mismatch — keep package.json, deno.json, server.json (both version fields) and the v<version> tag in sync"
             exit 1
           fi
 
