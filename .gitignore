@@ -3,3 +3,8 @@ dist/
 *.log
 .DS_Store
 .env
+
+# `mint release` writes the in-toto release Statement here as a build artifact.
+# It is never committed: release-provenance.yml regenerates it deterministically
+# from the tag, keyless-signs it, and attaches it to the GitHub release.
+*.intoto.json
