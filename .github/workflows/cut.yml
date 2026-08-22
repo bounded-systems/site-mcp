@@ -73,6 +73,13 @@ jobs:
     permissions:
       contents: write # create / upload to the GitHub release
       id-token: write # OIDC — cosign keyless signing
+      # Not optional, even though this call passes no assets-artifact. GitHub
+      # validates a called workflow's permission requests as the UNION of its
+      # permissions block AT LOAD TIME — before any `if:`, and without regard to
+      # which steps actually run. release-provenance.yml asks for actions: read
+      # (for `gh run download`), so a caller that withholds it fails the whole
+      # run with a startup_failure and no job ever starts.
+      actions: read
     uses: bounded-systems/mint/.github/workflows/release-provenance.yml@01951d98a708211d5708c46ef698deec4629d60d # mint 0.7.0
     with:
       ref: 01951d98a708211d5708c46ef698deec4629d60d
