@@ -27,13 +27,29 @@ export const STATIC_FILES: {
     uri: "site://corpus",
     name: "corpus",
     file: "corpus.json",
-    description: "Curated GitHub corpus: stats + highlighted repositories.",
+    description: "Curated GitHub corpus, unfolded: stats, highlights, and every ranked topic (71.7 KB).",
+  },
+  // The folded entry points, alongside the unfolded documents rather than in
+  // place of them. A resource row costs a URI, a name and a line of prose in
+  // `resources/list` — an order of magnitude less than a tool descriptor — and
+  // saves 6–8x on every read that only needed the aggregate.
+  {
+    uri: "site://corpus/index",
+    name: "corpus-index",
+    file: "corpus/index.json",
+    description: "Corpus index: stats, highlights, and the top ranked topics and languages, with a link to each full list (9.2 KB).",
   },
   {
     uri: "site://conformance",
     name: "conformance",
     file: "conformance.json",
-    description: "Per-page DOM conformance / accessibility report.",
+    description: "Web-build conformance report, unfolded: every criterion (19.7 KB).",
+  },
+  {
+    uri: "site://conformance/index",
+    name: "conformance-index",
+    file: "conformance/index.json",
+    description: "Conformance index: totals and one row per area, with a link to each area's criteria (3.2 KB).",
   },
   {
     uri: "site://resume-vc",

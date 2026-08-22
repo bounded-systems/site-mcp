@@ -34,18 +34,33 @@ function fixture(tamper = false) {
   const profile = '{"headline":"hello","label":"Engineer"}';
   const posts = '{"items":[{"slug":"hi","title":"Hi","summary":"s"}]}';
   const conformance = '{"pages":[]}';
+  const conformanceIndex = '{"summary":{"met":1},"areas":[]}';
+  const conformanceArea = '{"area":"accessibility","results":[]}';
+  const corpus = '{"interests":{"topics":[]}}';
+  const corpusIndex = '{"topics":{"count":0}}';
+  const corpusTopics = '{"count":0,"items":[]}';
   const post = '{"slug":"hi","title":"Hi","body":"b"}';
   const at = (p: string) => `https://example.test/${p}`;
   const manifest =
     `${sha256Hex(enc(profile))}  api/v1/profile.json\n` +
     `${sha256Hex(enc(posts))}  api/v1/posts.json\n` +
     `${sha256Hex(enc(conformance))}  api/v1/conformance.json\n` +
+    `${sha256Hex(enc(conformanceIndex))}  api/v1/conformance/index.json\n` +
+    `${sha256Hex(enc(conformanceArea))}  api/v1/conformance/areas/accessibility.json\n` +
+    `${sha256Hex(enc(corpus))}  api/v1/corpus.json\n` +
+    `${sha256Hex(enc(corpusIndex))}  api/v1/corpus/index.json\n` +
+    `${sha256Hex(enc(corpusTopics))}  api/v1/corpus/topics.json\n` +
     `${sha256Hex(enc(post))}  api/v1/posts/hi.json\n`;
   return {
     [at("site.sha256")]: manifest,
     [at("api/v1/profile.json")]: tamper ? '{"headline":"EVIL"}' : profile,
     [at("api/v1/posts.json")]: posts,
     [at("api/v1/conformance.json")]: conformance,
+    [at("api/v1/conformance/index.json")]: conformanceIndex,
+    [at("api/v1/conformance/areas/accessibility.json")]: conformanceArea,
+    [at("api/v1/corpus.json")]: corpus,
+    [at("api/v1/corpus/index.json")]: corpusIndex,
+    [at("api/v1/corpus/topics.json")]: corpusTopics,
     [at("api/v1/posts/hi.json")]: post,
   } as Record<string, string>;
 }
@@ -58,10 +73,10 @@ async function connect(files: Record<string, string>) {
   return { client, server };
 }
 
-test("exposes the same three tools", async () => {
+test("exposes one tool per subject, not one per drill-down", async () => {
   const { client, server } = await connect(fixture());
   const names = (await client.listTools()).tools.map((t) => t.name).sort();
-  assert.deepEqual(names, ["get_conformance", "get_post", "list_posts"]);
+  assert.deepEqual(names, ["get_conformance", "get_corpus", "get_post", "list_posts"]);
   await server.close();
 });
 
@@ -73,7 +88,9 @@ test("exposes the same static resources", async () => {
       "site://profile",
       "site://posts",
       "site://corpus",
+      "site://corpus/index",
       "site://conformance",
+      "site://conformance/index",
       "site://resume-vc",
       "site://openapi",
     ]
@@ -92,10 +109,30 @@ test("get_post returns verified content + verification _meta", async () => {
   await server.close();
 });
 
-test("get_conformance is verified", async () => {
+test("get_conformance defaults to the index, and unfolds on request", async () => {
   const { client, server } = await connect(fixture());
-  const res: any = await client.callTool({ name: "get_conformance", arguments: {} });
-  assert.equal(res._meta.verification.matchedSignedManifest, true);
+  // No argument → the fold. This is the change: the default used to be the
+  // whole report, which every caller paid for to read four numbers.
+  const idx: any = await client.callTool({ name: "get_conformance", arguments: {} });
+  assert.equal(idx._meta.verification.path, "api/v1/conformance/index.json");
+  assert.equal(idx._meta.verification.matchedSignedManifest, true);
+  // One step of u → one area.
+  const area: any = await client.callTool({ name: "get_conformance", arguments: { area: "accessibility" } });
+  assert.equal(area._meta.verification.path, "api/v1/conformance/areas/accessibility.json");
+  // The unfolded document is still reachable, at its own path.
+  const full: any = await client.callTool({ name: "get_conformance", arguments: { full: true } });
+  assert.equal(full._meta.verification.path, "api/v1/conformance.json");
+  await server.close();
+});
+
+test("get_corpus defaults to the index, and unfolds one list at a time", async () => {
+  const { client, server } = await connect(fixture());
+  const idx: any = await client.callTool({ name: "get_corpus", arguments: {} });
+  assert.equal(idx._meta.verification.path, "api/v1/corpus/index.json");
+  const topics: any = await client.callTool({ name: "get_corpus", arguments: { list: "topics" } });
+  assert.equal(topics._meta.verification.path, "api/v1/corpus/topics.json");
+  const full: any = await client.callTool({ name: "get_corpus", arguments: { full: true } });
+  assert.equal(full._meta.verification.path, "api/v1/corpus.json");
   await server.close();
 });
 

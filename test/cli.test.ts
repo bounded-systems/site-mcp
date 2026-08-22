@@ -28,16 +28,28 @@ function fakeFetch(files: Record<string, string>): typeof fetch {
 function fixture(tamper = false) {
   const posts = '{"items":[{"slug":"hi","title":"Hi"}]}';
   const conformance = '{"pages":[]}';
+  const conformanceIndex = '{"summary":{"met":1},"areas":[]}';
+  const conformanceArea = '{"area":"accessibility","results":[]}';
+  const corpusIndex = '{"topics":{"count":0}}';
+  const corpusTopics = '{"count":0,"items":[]}';
   const post = '{"slug":"hi","title":"Hi"}';
   const at = (p: string) => `https://example.test/${p}`;
   const manifest =
     `${sha256Hex(enc(posts))}  api/v1/posts.json\n` +
     `${sha256Hex(enc(conformance))}  api/v1/conformance.json\n` +
+    `${sha256Hex(enc(conformanceIndex))}  api/v1/conformance/index.json\n` +
+    `${sha256Hex(enc(conformanceArea))}  api/v1/conformance/areas/accessibility.json\n` +
+    `${sha256Hex(enc(corpusIndex))}  api/v1/corpus/index.json\n` +
+    `${sha256Hex(enc(corpusTopics))}  api/v1/corpus/topics.json\n` +
     `${sha256Hex(enc(post))}  api/v1/posts/hi.json\n`;
   return {
     [at("site.sha256")]: manifest,
     [at("api/v1/posts.json")]: tamper ? '{"items":"EVIL"}' : posts,
     [at("api/v1/conformance.json")]: conformance,
+    [at("api/v1/conformance/index.json")]: conformanceIndex,
+    [at("api/v1/conformance/areas/accessibility.json")]: conformanceArea,
+    [at("api/v1/corpus/index.json")]: corpusIndex,
+    [at("api/v1/corpus/topics.json")]: corpusTopics,
     [at("api/v1/posts/hi.json")]: post,
   } as Record<string, string>;
 }
@@ -51,10 +63,27 @@ test("`site-mcp list_posts` prints the verified feed", async () => {
   assert.equal(JSON.parse(r.stdout).items[0].slug, "hi");
 });
 
-test("`site-mcp get_conformance` is verified", async () => {
+test("`site-mcp get_conformance` returns the index, and `… accessibility` one area", async () => {
   const r = await run(["get_conformance"]);
   assert.equal(r.code, 0);
-  assert.ok("pages" in JSON.parse(r.stdout));
+  assert.ok("summary" in JSON.parse(r.stdout));
+  // The positional is the generator rule: one argument, one unfold step.
+  const a = await run(["get_conformance", "accessibility"]);
+  assert.equal(a.code, 0);
+  assert.equal(JSON.parse(a.stdout).area, "accessibility");
+  // And --full still reaches the unfolded report.
+  const f = await run(["get_conformance", "--full"]);
+  assert.equal(f.code, 0);
+  assert.ok("pages" in JSON.parse(f.stdout));
+});
+
+test("`site-mcp get_corpus` returns the index, and `… topics` the full list", async () => {
+  const r = await run(["get_corpus"]);
+  assert.equal(r.code, 0);
+  assert.ok("topics" in JSON.parse(r.stdout));
+  const t = await run(["get_corpus", "topics"]);
+  assert.equal(t.code, 0);
+  assert.ok("items" in JSON.parse(t.stdout));
 });
 
 test("`site-mcp get_post hi` parses the positional slug", async () => {
@@ -70,9 +99,10 @@ test("a tampered feed fails closed (exit 1, empty stdout)", async () => {
   assert.match(r.stderr, /digest mismatch/);
 });
 
-test("usage lists the three site commands", async () => {
+test("usage lists one command per subject", async () => {
   const r = await run([]);
   assert.match(r.stdout, /list_posts/);
   assert.match(r.stdout, /get_post/);
   assert.match(r.stdout, /get_conformance/);
+  assert.match(r.stdout, /get_corpus/);
 });
