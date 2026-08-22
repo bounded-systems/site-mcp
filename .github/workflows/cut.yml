@@ -1,0 +1,79 @@
+name: cut
+
+# The release, dispatched — site-mcp's tag cut in CI instead of on a laptop (#33).
+#
+# 0.3.0 sat merged, versioned and changelogged while the newest tag was still
+# v0.2.0, because the only step left was `git push origin v0.3.0` from a checkout
+# and nobody was at one. That is the gap mint's release-cut exists to close
+# (mint#22), and mint adopted it on itself in mint#39.
+#
+# WHY EVERYTHING DOWNSTREAM IS CHAINED RATHER THAN TRIGGERED. GitHub creates no
+# workflow runs from events caused by GITHUB_TOKEN. Neither `publish.yml`'s
+# `push: tags` nor `release.yml`'s will fire for the tag this cuts, so leaving
+# them to their triggers produces a tag, a green run, and no release. Both are
+# called directly here as dependent jobs and handed the tag that was just cut.
+#
+# DRY RUN DEFAULTS TO TRUE. npm and the MCP Registry are irreversible and JSR
+# versions are immutable, so verifying is the default and releasing is the
+# explicit act. Dispatch once to watch every guard pass, then again with dry-run
+# unchecked.
+#
+# The tag-push path is untouched. A release cut from a checkout still works
+# exactly as it did; this adds a door, it does not close one.
+
+on:
+  workflow_dispatch:
+    inputs:
+      expect-version:
+        description: "Version you expect to cut (e.g. 0.3.0). Fails if the manifests disagree."
+        type: string
+        required: false
+      dry-run:
+        description: "Verify only — run every guard and cut nothing."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Guards, then the tag. Reads the version out of deno.json/package.json, refuses
+  # to re-cut an existing tag, refuses to cut while `.release/` still holds
+  # unconsumed intents, and proves the in-toto statement is derivable — all before
+  # anything is pushed. Outputs `cut: 'true'` only if a tag actually landed.
+  cut:
+    permissions:
+      contents: write # create + push the tag
+    uses: bounded-systems/mint/.github/workflows/release-cut.yml@01951d98a708211d5708c46ef698deec4629d60d # mint 0.7.0
+    with:
+      ref: 01951d98a708211d5708c46ef698deec4629d60d
+      expect-version: ${{ inputs.expect-version }}
+      dry-run: ${{ inputs.dry-run }}
+
+  # The three registries. `if:` on `cut` means a dry run stops here.
+  publish:
+    needs: cut
+    if: needs.cut.outputs.cut == 'true'
+    permissions:
+      contents: read
+      id-token: write # OIDC — npm trusted publishing, JSR, MCP Registry namespace
+    uses: ./.github/workflows/publish.yml
+    with:
+      # Load-bearing: this run's event is workflow_dispatch on a BRANCH, so
+      # without it every job would verify and publish main under a tag's name.
+      tag: ${{ needs.cut.outputs.tag }}
+
+  # The signed in-toto release Statement, attached to the GitHub release. Same
+  # tag, same reason for passing it: mint#38 added this input precisely because
+  # a chained caller would otherwise attest main and create a release named
+  # after the branch.
+  provenance:
+    needs: cut
+    if: needs.cut.outputs.cut == 'true'
+    permissions:
+      contents: write # create / upload to the GitHub release
+      id-token: write # OIDC — cosign keyless signing
+    uses: bounded-systems/mint/.github/workflows/release-provenance.yml@01951d98a708211d5708c46ef698deec4629d60d # mint 0.7.0
+    with:
+      ref: 01951d98a708211d5708c46ef698deec4629d60d
+      tag: ${{ needs.cut.outputs.tag }}

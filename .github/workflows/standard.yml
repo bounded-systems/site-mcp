@@ -1,0 +1,28 @@
+name: standard
+
+# The org's shared repo lane (bounded-systems/.github → repo-standard.yml).
+#
+# site-mcp had no test lane at all: `npm test` ran on contributors' machines and
+# nowhere else, so every test in test/ was documentation rather than a gate. That
+# is the shape this repo's own workflows warn about — a control that reads green
+# while gating nothing — and it is why the fixture tests added alongside this
+# (#33) would otherwise have been decoration.
+#
+# security: false, deliberately. deps.yml is the org's STANDARDIZED byte-identical
+# OSV caller and is already HARD-FAIL here; turning security on in this lane too
+# would scan the same lockfile twice and report it under two different check names.
+# One scanner, one verdict.
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  standard:
+    uses: bounded-systems/.github/.github/workflows/repo-standard.yml@d43c3280588ef05f4ead43426db1091d4cb8f520
+    with:
+      security: false
+      test: true
+      runtime: node
+      test-command: "npm ci --no-audit --no-fund && npm run typecheck && npm test"
