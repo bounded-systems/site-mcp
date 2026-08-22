@@ -44,9 +44,9 @@ jobs:
   cut:
     permissions:
       contents: write # create + push the tag
-    uses: bounded-systems/mint/.github/workflows/release-cut.yml@01951d98a708211d5708c46ef698deec4629d60d # mint 0.7.0
+    uses: bounded-systems/mint/.github/workflows/release-cut.yml@44d61e153a0c0bdbe44ce651f8bea4defe8ede51 # mint v0.7.2
     with:
-      ref: 01951d98a708211d5708c46ef698deec4629d60d
+      ref: 44d61e153a0c0bdbe44ce651f8bea4defe8ede51
       expect-version: ${{ inputs.expect-version }}
       dry-run: ${{ inputs.dry-run }}
 
@@ -80,7 +80,7 @@ jobs:
       # (for `gh run download`), so a caller that withholds it fails the whole
       # run with a startup_failure and no job ever starts.
       actions: read
-    uses: bounded-systems/mint/.github/workflows/release-provenance.yml@01951d98a708211d5708c46ef698deec4629d60d # mint 0.7.0
+    uses: bounded-systems/mint/.github/workflows/release-provenance.yml@44d61e153a0c0bdbe44ce651f8bea4defe8ede51 # mint v0.7.2
     with:
-      ref: 01951d98a708211d5708c46ef698deec4629d60d
+      ref: 44d61e153a0c0bdbe44ce651f8bea4defe8ede51
       tag: ${{ needs.cut.outputs.tag }}

@@ -13,9 +13,12 @@ name: release
 # Exactly one of the two paths ever runs for a given tag, which is what keeps
 # this clear of the #19 immutable-release hazard.
 #
-# Pinned to an immutable mint commit SHA — the commit mint 0.7.0 tags, the first
-# mint version carrying both release-cut.yml and release-provenance's `tag`
-# input. Keep this pin, version.yml's and cut.yml's on the same mint.
+# Pinned to an immutable mint commit SHA — the commit mint v0.7.2 tags. That is
+# the first mint carrying release-cut.yml, release-provenance's `tag` input
+# (mint#38), the changelog-as-annotation fix (mint#42) and --cleanup=verbatim
+# (mint#45); anything earlier gives a release whose notes are a tag name or a
+# heading-less bullet list. Keep this pin, version.yml's and cut.yml's on the
+# same mint — a test asserts they agree.
 on:
   push:
     tags: ["v*"]
@@ -26,6 +29,6 @@ permissions:
 
 jobs:
   release:
-    uses: bounded-systems/mint/.github/workflows/release-provenance.yml@01951d98a708211d5708c46ef698deec4629d60d # mint 0.7.0
+    uses: bounded-systems/mint/.github/workflows/release-provenance.yml@44d61e153a0c0bdbe44ce651f8bea4defe8ede51 # mint v0.7.2
     with:
-      ref: 01951d98a708211d5708c46ef698deec4629d60d
+      ref: 44d61e153a0c0bdbe44ce651f8bea4defe8ede51
