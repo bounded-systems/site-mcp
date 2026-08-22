@@ -114,3 +114,39 @@ test("every mint call site is pinned to the same mint commit", () => {
     `mint call sites disagree: ${sites.map((s) => `${s.name}=${s.sha.slice(0, 8)}`).join(", ")}`,
   );
 });
+
+test("each chained caller grants what the called workflow's permissions block asks for", () => {
+  // GitHub validates a called reusable workflow's permission requests as the
+  // UNION of its `permissions:` block, AT LOAD TIME — before any `if:`, and
+  // regardless of which steps would run. Withholding one produces a
+  // `startup_failure`: no job starts, so there is no job log to read and no
+  // failing step to point at. The first dispatch of cut.yml did exactly that,
+  // because release-provenance.yml asks for `actions: read` (for
+  // `gh run download`) and the provenance job granted only two of the three.
+  const blocks = jobBlocks(wf("cut.yml"));
+  const required: Record<string, string[]> = {
+    // release-cut.yml
+    cut: ["contents: write"],
+    // publish.yml, union over its four jobs
+    publish: ["contents: read", "id-token: write"],
+    // release-provenance.yml — all three, actions: read included
+    provenance: ["contents: write", "id-token: write", "actions: read"],
+  };
+  for (const [job, perms] of Object.entries(required)) {
+    const block = blocks[job];
+    assert.ok(block, `cut.yml is missing the ${job} job`);
+    for (const p of perms) {
+      const [scope, level] = p.split(": ");
+      // A real `permissions:` entry on its own line — not the substring, which
+      // the surrounding comments also contain. Matching prose instead of the
+      // grant is how the first draft of this test passed while the permission
+      // it names had been removed.
+      const granted = new RegExp(`^\\s+${scope}: ${level}\\s*(#.*)?$`, "m").test(block);
+      assert.ok(
+        granted,
+        `${job} must grant \`${p}\` — the workflow it calls asks for it, and a ` +
+          `caller that withholds it fails the run before any job starts`,
+      );
+    }
+  }
+});
