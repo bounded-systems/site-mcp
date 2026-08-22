@@ -23,7 +23,7 @@ fetch client, the `sha256` manifest + Sigstore checks, and the
 site-mcp supplies only:
 
 - **the verbs** ([`src/verbs.ts`](./src/verbs.ts)) — `list_posts`, `get_post`,
-  `get_conformance`, each authored once as a [`@bounded-systems/verbspec`](https://jsr.io/@bounded-systems/verbspec)
+  `get_conformance`, `get_corpus`, each authored once as a [`@bounded-systems/verbspec`](https://jsr.io/@bounded-systems/verbspec)
   `VerbSpec`;
 - **the resource catalog** ([`src/catalog.ts`](./src/catalog.ts)) — the
   `site://…` resources;
@@ -56,7 +56,11 @@ npx -y @bounded-systems/site-mcp
 
 # CLI — the SAME verbs, printing the verified JSON:
 npx -y @bounded-systems/site-mcp list_posts
-npx -y @bounded-systems/site-mcp get_conformance
+npx -y @bounded-systems/site-mcp get_conformance                 # the index
+npx -y @bounded-systems/site-mcp get_conformance accessibility   # one area
+npx -y @bounded-systems/site-mcp get_conformance --full          # every criterion
+npx -y @bounded-systems/site-mcp get_corpus                      # the index
+npx -y @bounded-systems/site-mcp get_corpus topics               # one full list
 npx -y @bounded-systems/site-mcp get_post agent-authored-code-drift
 ```
 
@@ -94,13 +98,38 @@ site-mcp ready (stdio) → https://robertdelanghe.dev; signature mode=off
 
 ## Tools / CLI commands (read-only)
 
-The same three verbs, on both surfaces:
+The same four verbs, on both surfaces:
 
-| Tool / command   | Args            | Returns |
-| ---------------- | --------------- | ------- |
-| `list_posts`     | —               | The posts feed (slug, title, summary, tags) |
-| `get_post`       | `slug`          | A single post by slug |
-| `get_conformance`| —               | The conformance / accessibility report |
+| Tool / command    | Args                     | Returns |
+| ----------------- | ------------------------ | ------- |
+| `list_posts`      | —                        | The posts feed (slug, title, summary, tags) |
+| `get_post`        | `slug`                   | A single post by slug |
+| `get_conformance` | — \| `area` \| `--full`  | The conformance **index** (3.2 KB) \| one area \| every criterion (19.7 KB) |
+| `get_corpus`      | — \| `list` \| `--full`  | The corpus **index** (9.2 KB) \| one ranked list \| the whole corpus (71.7 KB) |
+
+### One verb per subject, not one per drill-down
+
+A client loads every tool's name, description and input schema into its context
+**before any call is made** — a cost paid on every session whether or not the
+tool is used — and choosing among the tools is itself a fan-out. So the tool list
+is a fold: `F` is the list, a call is one step of the generator rule, and a
+terminal response is where expansion stops.
+
+Which makes a verb per drill-down the wrong shape: it grows the part paid
+*always* in order to shrink the part paid *sometimes*. `get_conformance_index` +
+`get_conformance_area` + `get_corpus_index` + `get_corpus_list` would take this
+server from three tools to eight.
+
+Instead there is one verb per subject, and **the parameter is the generator
+rule**: no argument returns the index, an argument unfolds one branch of it, and
+`--full` still reaches the unfolded document at its own path. Nothing was removed
+from the API — `site://conformance` and `site://corpus` still serve the complete
+documents, and `site://conformance/index` and `site://corpus/index` are new
+entry points alongside them.
+
+> **Changed default.** `get_conformance` with no arguments used to return the
+> whole 19.7 KB report; it now returns the 3.2 KB index. Pass `--full` (CLI) or
+> `{"full": true}` (MCP) for the previous behaviour.
 
 Resource reads and tool results carry a `_meta.verification` block (the
 manifest-relative path, source URL, the verified `sha256`, and the manifest
