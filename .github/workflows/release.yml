@@ -1,11 +1,21 @@
 name: release
 
 # Release provenance via the bounded-systems mint capability. On a v<version> tag
-# (cut by `mint release`), emits the deterministic in-toto release Statement
-# (tag → version plan → commit), keyless-signs it (cosign/OIDC), and attaches it
-# to the GitHub release. The registry publish stays in its existing workflow;
-# this job owns VERSION + TAG provenance only. Pinned to an immutable mint commit
-# SHA; bump when mint tags.
+# cut from a CHECKOUT (`mint release`), emits the deterministic in-toto release
+# Statement (tag → version plan → commit), keyless-signs it (cosign/OIDC), and
+# attaches it to the GitHub release. The registry publish stays in publish.yml;
+# this job owns VERSION + TAG provenance only.
+#
+# THE CI-CUT PATH DOES NOT COME THROUGH HERE, and cannot race this workflow for
+# the release. A tag pushed by `release-cut` carries GITHUB_TOKEN, and GitHub
+# creates no workflow runs from those events — so this trigger is silent for a
+# dispatched cut, and cut.yml calls release-provenance itself as a dependent job.
+# Exactly one of the two paths ever runs for a given tag, which is what keeps
+# this clear of the #19 immutable-release hazard.
+#
+# Pinned to an immutable mint commit SHA — the commit mint 0.7.0 tags, the first
+# mint version carrying both release-cut.yml and release-provenance's `tag`
+# input. Keep this pin, version.yml's and cut.yml's on the same mint.
 on:
   push:
     tags: ["v*"]
@@ -16,6 +26,6 @@ permissions:
 
 jobs:
   release:
-    uses: bounded-systems/mint/.github/workflows/release-provenance.yml@v0.3.1 # mint
+    uses: bounded-systems/mint/.github/workflows/release-provenance.yml@01951d98a708211d5708c46ef698deec4629d60d # mint 0.7.0
     with:
-      ref: v0.3.1
+      ref: 01951d98a708211d5708c46ef698deec4629d60d
