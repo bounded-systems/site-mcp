@@ -1,6 +1,6 @@
 {
   "name": "@bounded-systems/site-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "mcpName": "io.github.bounded-systems/site-mcp",
   "description": "Read-only MCP server over robertdelanghe.dev's signed static API. A thin implementation of @bounded-systems/static-mcp: the site's verbs + resource catalog + config, served as a Sigstore-verified static-response MCP server over stdio.",
   "license": "MIT",
