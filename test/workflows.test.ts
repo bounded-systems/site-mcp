@@ -14,6 +14,18 @@ const wf = (name: string) => readFileSync(`.github/workflows/${name}`, "utf8");
 // name to end-of-file instead is what let a dropped `tag:` in one job pass on
 // the strength of the NEXT job still having one — a fixture test that reads
 // green against the defect it names is worse than no test.
+// Executable lines only — YAML comments stripped. Assertions about what a
+// workflow DOES must not read what it SAYS: this file has now had three
+// fixtures agree with their own prose instead of the code, in both directions
+// (an `assert.match` satisfied by a comment, and an `assert.doesNotMatch`
+// tripped by a comment naming the very defect it forbids).
+function code(yaml: string): string {
+  return yaml
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l))
+    .join("\n");
+}
+
 function jobBlocks(yaml: string): Record<string, string> {
   const section = yaml.slice(yaml.indexOf("\njobs:") + 1);
   const out: Record<string, string> = {};
@@ -148,5 +160,49 @@ test("each chained caller grants what the called workflow's permissions block as
           `caller that withholds it fails the run before any job starts`,
       );
     }
+  }
+});
+
+// --- the release path must not install an unreviewed npm, and must be re-runnable
+//
+// v0.3.0 shipped to JSR and the GitHub release, and never reached npm or the MCP
+// Registry, because `npm install -g npm@latest` pulled an npm whose new default
+// refuses remote-tarball dependencies:
+//
+//   npm error code EALLOWREMOTE
+//   npm error Refusing to fetch "@bounded-systems/verbspec@https://npm.jsr.io/...tgz"
+//
+// The lockfile resolves the JSR npm-compat deps to exactly those URLs, so `npm ci`
+// died before the publish step. Nothing was published — and nothing pinned the
+// tool that broke it.
+test("publish.yml does not globally install npm into the release path", () => {
+  const publish = code(wf("publish.yml"));
+  assert.doesNotMatch(
+    publish,
+    /npm install -g npm@/,
+    "an unpinned global npm upgrade is what broke v0.3.0 — assert the floor instead",
+  );
+  assert.match(publish, /npm --version/, "the version floor must still be checked");
+});
+
+// A partial release has to be recoverable by re-dispatching this workflow. Both
+// registries refuse a duplicate version — and JSR's are immutable — so on a
+// recovery run an already-published registry must SKIP, not fail the job.
+test("publish.yml skips a registry that already has this version", () => {
+  const blocks = jobBlocks(wf("publish.yml"));
+  for (const [job, guard] of [["npm", "onnpm"], ["jsr", "onjsr"]] as const) {
+    const block = blocks[job];
+    assert.ok(block, `publish.yml is missing the ${job} job`);
+    assert.match(
+      block,
+      new RegExp(`id: ${guard}`),
+      `${job} needs an idempotence check before publishing`,
+    );
+    assert.match(
+      block,
+      new RegExp(`if: steps\\.${guard}\\.outputs\\.skip != 'true'`),
+      `${job}'s publish step must be gated on that check, or a recovery dispatch ` +
+        `reports failure for a registry that already succeeded`,
+    );
   }
 });
