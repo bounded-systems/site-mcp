@@ -25,7 +25,18 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch: {}
+  # Standalone dispatch is the RECOVERY door: a release whose tag and GitHub
+  # release exist but whose registries did not all land (v0.3.0, #38). It takes
+  # the same tag input as workflow_call for the same reason — a dispatch runs on
+  # a BRANCH, so without it every job checks out main and publishes whatever has
+  # landed there since, under the version tag's name. Leave it empty only to
+  # publish the current branch state deliberately.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish, e.g. v0.3.0. Empty = the current branch."
+        type: string
+        required: false
   workflow_call:
     inputs:
       tag:
