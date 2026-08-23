@@ -6,7 +6,7 @@
 // wrong, which is the shape of defect a green check cannot report on itself.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 const wf = (name: string) => readFileSync(`.github/workflows/${name}`, "utf8");
 
@@ -42,88 +42,147 @@ function jobBlocks(yaml: string): Record<string, string> {
   return out;
 }
 
-const TAG_EXPR = "${{ inputs.tag || github.ref_name }}";
+const MINT_LANE = "npm-publish.yml";
 
-test("cut.yml chains publish and provenance, and hands both the cut tag", () => {
-  const cut = wf("cut.yml");
+// THE PRESCRIBED CALLER FILENAME (mint#48).
+//
+// npm's trusted publishing validates the ENTRY workflow's filename, not the file
+// containing `npm publish`, and a package may have exactly ONE trusted publisher
+// configured. This repo had three registerable entry points — `cut.yml`
+// (dispatch), `publish.yml` (tag push AND dispatch) — so npm validated a
+// different name depending on how the release started, and only one of the three
+// could ever be configured. The breakage is invisible until a release dies with
+// ENEEDAUTH after the tag is already pushed.
+//
+// This is not a property any single file can state about itself: it belongs to
+// the DIRECTORY, so the whole directory is the fixture.
+const NPM_ENTRY = "release.yml";
 
-  // The cut itself must call mint's reusable release-cut, not reimplement it.
-  assert.match(
-    cut,
-    /uses:\s+bounded-systems\/mint\/\.github\/workflows\/release-cut\.yml@[0-9a-f]{40}/,
-    "cut job must call mint's release-cut, pinned to a full commit SHA",
+test("exactly one workflow is an npm entry point, and it is the prescribed name", () => {
+  const reaches = readdirSync(".github/workflows")
+    .filter((f) => f.endsWith(".yml"))
+    .filter((f) => {
+      const src = code(wf(f));
+      return /\bnpm publish\b/.test(src) || src.includes(MINT_LANE);
+    });
+
+  assert.deepEqual(
+    reaches,
+    [NPM_ENTRY],
+    `npm validates the entry workflow's filename and a package gets ONE trusted ` +
+      `publisher, so exactly one file may reach npm: ${NPM_ENTRY}. Found: ${reaches.join(", ")}`,
   );
-
-  // Both downstream jobs exist, gate on a real cut, and receive the tag.
-  const blocks = jobBlocks(cut);
-  for (const job of ["publish", "provenance"]) {
-    const block = blocks[job];
-    assert.ok(block, `cut.yml is missing the ${job} job`);
-    assert.match(block, /needs:\s+cut/, `${job} must depend on cut`);
-    assert.match(
-      block,
-      /if:\s+needs\.cut\.outputs\.cut == 'true'/,
-      `${job} must not run when the cut was a dry run`,
-    );
-    // The whole point. A tag pushed by GITHUB_TOKEN triggers nothing, so these
-    // are chained — and a chained run's ref is a BRANCH. Drop this and the job
-    // publishes main under a version tag's name.
-    assert.match(
-      block,
-      /tag:\s+\$\{\{ needs\.cut\.outputs\.tag \}\}/,
-      `${job} must be passed the tag release-cut just made`,
-    );
-  }
 });
 
-test("publish.yml is callable, and every checkout is pinned to the tag", () => {
-  const publish = wf("publish.yml");
+// #33/#34/#38/mint#48 in one file. Each property below is a defect that reached
+// a real release, and each is the kind a later edit undoes by accident.
+test("release.yml: three doors, a chained cut, and one resolved tag", () => {
+  const src = code(wf(NPM_ENTRY));
+  const blocks = jobBlocks(src);
 
-  assert.match(publish, /^\s{2}workflow_call:/m, "publish.yml must be callable");
+  assert.match(src, /^\s{2}push:\n\s{4}tags: \["v\*"\]$/m, "the tag-push door is gone — a laptop cut would do nothing");
+  assert.match(src, /^\s{2}workflow_dispatch:$/m, "the dispatch door is gone — the release needs a laptop again");
+
+  // 1. The cut must call mint's reusable release-cut, not reimplement it, and
+  //    must be dispatch-only: on a tag push the tag already exists.
   assert.match(
-    publish,
-    /workflow_call:[\s\S]*?inputs:[\s\S]*?tag:/,
-    "publish.yml must accept a tag input",
+    blocks.cut,
+    /uses:\s+bounded-systems\/mint\/\.github\/workflows\/release-cut\.yml@[0-9a-f]{40}/,
+    "the cut job must call mint's release-cut, pinned to a full commit SHA",
+  );
+  assert.match(
+    blocks.cut,
+    /if: github\.event_name == 'workflow_dispatch' && inputs\.recover-tag == ''/,
+    "the cut must be dispatch-only and skipped on the recovery path",
   );
 
-  // Every checkout — not most of them. An unpinned one silently builds, tests
-  // or publishes the default branch in the chained path.
-  const checkouts = publish
-    .split(/uses: actions\/checkout@/)
-    .slice(1)
-    // Only the step's own lines: the next `- name:` starts a new step, and
-    // anything after it belongs to a different checkout's assertion.
-    .map((rest) => rest.split(/\n\s+- /)[0]);
-  assert.ok(checkouts.length >= 4, `expected a checkout per job, found ${checkouts.length}`);
-  for (const c of checkouts) {
-    assert.ok(
-      c.includes(`ref: ${TAG_EXPR}`),
-      `every checkout must pin ref to \`${TAG_EXPR}\`; found:\n${c}`,
+  // 2. The chain must be gated on an ACTUAL cut. `cut` reports cut: 'false' for
+  //    a dry run, so gating `resolve` on that one output is what makes dry-run
+  //    mean "publish nothing".
+  assert.match(
+    blocks.resolve,
+    /needs\.cut\.outputs\.cut == 'true'/,
+    "nothing gates the chain on a real cut — a dry run would publish",
+  );
+  //    ...and `resolve` must survive `cut` being SKIPPED, which it is on both the
+  //    push and recovery doors. A plain `needs:` would skip it with them.
+  assert.match(blocks.resolve, /!cancelled\(\)/, "resolve must run when the cut job is skipped");
+
+  // 3. Every checkout names the resolved tag. On a dispatch the run's ref is a
+  //    BRANCH, so one unpinned checkout publishes main under a version tag's
+  //    name (#34) — and that is silent, not red.
+  const checkouts = src.split("\n").filter((l) => l.includes("actions/checkout@")).length;
+  const pinned = (src.match(/ref: \$\{\{ needs\.resolve\.outputs\.tag \}\}/g) || []).length;
+  assert.ok(checkouts > 0, "no checkouts found — did the job structure change?");
+  assert.equal(
+    pinned,
+    checkouts,
+    `${checkouts} checkout(s) but ${pinned} pinned to the resolved tag — an unpinned one releases the dispatch branch`,
+  );
+
+  // 4. Nothing may read the raw ref afterwards; one leftover expansion is enough
+  //    to send a dispatched release back to the branch.
+  assert.deepEqual(
+    src.split("\n").filter((l) => l.includes("$GITHUB_REF_NAME")),
+    [],
+    "a $GITHUB_REF_NAME expansion survives — on a dispatched run that is the branch",
+  );
+});
+
+// The recovery door exists because v0.3.0 reached JSR and the GitHub release and
+// never reached npm or the MCP Registry (#38). Re-running the whole release for
+// that is wrong twice over: the tag cannot be re-cut, and a published GitHub
+// release is immutable, so the provenance job would go red for work that had in
+// fact succeeded (mint#19).
+test("release.yml: the recovery door names a tag and skips the cut and the provenance", () => {
+  const src = code(wf(NPM_ENTRY));
+  const dispatch = src.slice(src.indexOf("workflow_dispatch:"), src.indexOf("\npermissions:"));
+  assert.match(dispatch, /recover-tag:/, "workflow_dispatch must accept a tag to re-publish");
+
+  const blocks = jobBlocks(src);
+  assert.match(
+    blocks.resolve,
+    /RECOVER: \$\{\{ inputs\.recover-tag \}\}/,
+    "resolve must read the recovery tag, or the door leads to the branch",
+  );
+  assert.match(
+    blocks.provenance,
+    /if: \$\{\{ inputs\.recover-tag == '' \}\}/,
+    "provenance must be skipped on the recovery path — the release it would create already exists",
+  );
+  for (const job of ["npm", "jsr", "mcp-registry"]) {
+    assert.doesNotMatch(
+      blocks[job],
+      /recover-tag/,
+      `${job} must still run on the recovery path — re-publishing the registries is what that door is for`,
     );
   }
-
-  // The version gate has to compare against the tag in scope, not the raw ref —
-  // under workflow_call the ref is a branch name.
-  assert.match(
-    publish,
-    /TAG:\s+\$\{\{ inputs\.tag \|\| github\.ref_name \}\}/,
-    "the verify job must resolve one TAG for both entry paths",
-  );
 });
 
 test("every mint call site is pinned to the same mint commit", () => {
-  const sites = ["cut.yml", "release.yml", "version.yml"].flatMap((name) =>
-    [...wf(name).matchAll(/bounded-systems\/mint\/[^@]+@([0-9a-f]{40})/g)].map((m) => ({
+  const files = ["release.yml", "version.yml"];
+  const sites = files.flatMap((name) => [
+    // `uses: .../mint/...@<sha>` — the workflow being called.
+    ...[...wf(name).matchAll(/bounded-systems\/mint\/[^@]+@([0-9a-f]{40})/g)].map((m) => ({
       name,
+      where: "uses",
       sha: m[1],
     })),
-  );
-  assert.ok(sites.length >= 4, `expected at least 4 mint call sites, found ${sites.length}`);
+    // `ref: <sha>` — the mint runtime those workflows check out. It drifts
+    // independently of the `uses:` pin, and a run pinned to two different mints
+    // is a run whose behaviour matches neither.
+    ...[...code(wf(name)).matchAll(/^\s+ref: ([0-9a-f]{40})\s*$/gm)].map((m) => ({
+      name,
+      where: "ref",
+      sha: m[1],
+    })),
+  ]);
+  assert.ok(sites.length >= 6, `expected at least 6 mint pins, found ${sites.length}`);
   const shas = new Set(sites.map((s) => s.sha));
   assert.equal(
     shas.size,
     1,
-    `mint call sites disagree: ${sites.map((s) => `${s.name}=${s.sha.slice(0, 8)}`).join(", ")}`,
+    `mint pins disagree: ${sites.map((s) => `${s.name}:${s.where}=${s.sha.slice(0, 8)}`).join(", ")}`,
   );
 });
 
@@ -132,21 +191,21 @@ test("each chained caller grants what the called workflow's permissions block as
   // UNION of its `permissions:` block, AT LOAD TIME — before any `if:`, and
   // regardless of which steps would run. Withholding one produces a
   // `startup_failure`: no job starts, so there is no job log to read and no
-  // failing step to point at. The first dispatch of cut.yml did exactly that,
-  // because release-provenance.yml asks for `actions: read` (for
+  // failing step to point at. The first dispatch of the old cut.yml did exactly
+  // that, because release-provenance.yml asks for `actions: read` (for
   // `gh run download`) and the provenance job granted only two of the three.
-  const blocks = jobBlocks(wf("cut.yml"));
+  const blocks = jobBlocks(wf(NPM_ENTRY));
   const required: Record<string, string[]> = {
     // release-cut.yml
     cut: ["contents: write"],
-    // publish.yml, union over its four jobs
-    publish: ["contents: read", "id-token: write"],
     // release-provenance.yml — all three, actions: read included
     provenance: ["contents: write", "id-token: write", "actions: read"],
+    // mint's npm-publish.yml
+    npm: ["contents: read", "id-token: write"],
   };
   for (const [job, perms] of Object.entries(required)) {
     const block = blocks[job];
-    assert.ok(block, `cut.yml is missing the ${job} job`);
+    assert.ok(block, `${NPM_ENTRY} is missing the ${job} job`);
     for (const p of perms) {
       const [scope, level] = p.split(": ");
       // A real `permissions:` entry on its own line — not the substring, which
@@ -163,7 +222,7 @@ test("each chained caller grants what the called workflow's permissions block as
   }
 });
 
-// --- the release path must not install an unreviewed npm, and must be re-runnable
+// --- the release path must not install an unreviewed npm ---------------------
 //
 // v0.3.0 shipped to JSR and the GitHub release, and never reached npm or the MCP
 // Registry, because `npm install -g npm@latest` pulled an npm whose new default
@@ -173,51 +232,51 @@ test("each chained caller grants what the called workflow's permissions block as
 //   npm error Refusing to fetch "@bounded-systems/verbspec@https://npm.jsr.io/...tgz"
 //
 // The lockfile resolves the JSR npm-compat deps to exactly those URLs, so `npm ci`
-// died before the publish step. Nothing was published — and nothing pinned the
-// tool that broke it.
-test("publish.yml does not globally install npm into the release path", () => {
-  const publish = code(wf("publish.yml"));
-  assert.doesNotMatch(
-    publish,
-    /npm install -g npm@/,
-    "an unpinned global npm upgrade is what broke v0.3.0 — assert the floor instead",
-  );
-  assert.match(publish, /npm --version/, "the version floor must still be checked");
-});
-
-// A partial release has to be recoverable by re-dispatching this workflow. Both
-// registries refuse a duplicate version — and JSR's are immutable — so on a
-// recovery run an already-published registry must SKIP, not fail the job.
-test("publish.yml skips a registry that already has this version", () => {
-  const blocks = jobBlocks(wf("publish.yml"));
-  for (const [job, guard] of [["npm", "onnpm"], ["jsr", "onjsr"]] as const) {
-    const block = blocks[job];
-    assert.ok(block, `publish.yml is missing the ${job} job`);
-    assert.match(
-      block,
-      new RegExp(`id: ${guard}`),
-      `${job} needs an idempotence check before publishing`,
-    );
-    assert.match(
-      block,
-      new RegExp(`if: steps\\.${guard}\\.outputs\\.skip != 'true'`),
-      `${job}'s publish step must be gated on that check, or a recovery dispatch ` +
-        `reports failure for a registry that already succeeded`,
+// died before the publish step. The floor now lives in mint's lane, which asserts
+// it rather than installing it — but the mutation this forbids would land HERE if
+// it came back, so the assertion stays here and covers every workflow.
+test("no workflow globally installs npm into the release path", () => {
+  for (const f of readdirSync(".github/workflows").filter((f) => f.endsWith(".yml"))) {
+    assert.doesNotMatch(
+      code(wf(f)),
+      /npm install -g npm@/,
+      `${f}: an unpinned global npm upgrade is what broke v0.3.0 — assert the floor instead`,
     );
   }
+  // And the floor is still checked, by delegating to the lane that owns it.
+  assert.match(
+    jobBlocks(code(wf(NPM_ENTRY))).npm,
+    new RegExp(`uses: bounded-systems/mint/\\.github/workflows/${MINT_LANE.replace(".", "\\.")}@[0-9a-f]{40}`),
+    "the npm publish must go through mint's lane, which owns the npm >= 11.5.1 floor",
+  );
 });
 
-// The standalone dispatch is the recovery door for a half-shipped release, and
-// a dispatch runs on a BRANCH. Without a tag input every job checks out main and
-// publishes whatever has landed there since, under the version tag's name — the
-// same defect every checkout in this file is pinned against, arriving through
-// the one trigger that was left without a way to say which tag it means.
-test("publish.yml's workflow_dispatch can target a tag", () => {
-  const publish = code(wf("publish.yml"));
-  const dispatch = publish.slice(
-    publish.indexOf("workflow_dispatch:"),
-    publish.indexOf("workflow_call:"),
+// A partial release has to be recoverable by re-running this workflow. JSR
+// refuses a duplicate version and its versions are IMMUTABLE, so on a recovery
+// run an already-published JSR must SKIP, not fail the job — v0.3.0 reached JSR
+// while npm was failing, and re-attempting it would report failure for the one
+// registry that had succeeded. (npm's half of this now lives in mint's lane.)
+test("the JSR publish skips a version that already landed", () => {
+  const block = jobBlocks(code(wf(NPM_ENTRY))).jsr;
+  assert.ok(block, `${NPM_ENTRY} is missing the jsr job`);
+  assert.match(block, /id: onjsr/, "jsr needs an idempotence check before publishing");
+  assert.match(
+    block,
+    /if: steps\.onjsr\.outputs\.skip != 'true'/,
+    "the jsr publish step must be gated on that check, or a recovery run reports " +
+      "failure for a registry that already succeeded",
   );
-  assert.match(dispatch, /inputs:/, "workflow_dispatch must accept inputs");
-  assert.match(dispatch, /tag:/, "workflow_dispatch must accept a tag to publish");
+});
+
+// The npm-side configuration is uniform org-wide only if this repo actually
+// passes the environment mint's lane defaults to — it is the `environment` claim
+// in the OIDC token, and therefore what npm's trusted-publisher Environment field
+// pins. A job with `uses:` cannot carry `environment:`, so it can only arrive as
+// this input.
+test("the npm lane is passed the npm-publish environment", () => {
+  assert.match(
+    jobBlocks(code(wf(NPM_ENTRY))).npm,
+    /environment: npm-publish/,
+    "npm's trusted-publisher Environment field pins this claim; without it the pin cannot be set",
+  );
 });

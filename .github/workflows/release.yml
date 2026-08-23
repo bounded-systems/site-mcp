@@ -1,34 +1,274 @@
 name: release
 
-# Release provenance via the bounded-systems mint capability. On a v<version> tag
-# cut from a CHECKOUT (`mint release`), emits the deterministic in-toto release
-# Statement (tag → version plan → commit), keyless-signs it (cosign/OIDC), and
-# attaches it to the GitHub release. The registry publish stays in publish.yml;
-# this job owns VERSION + TAG provenance only.
+# THE SINGLE RELEASE ENTRY POINT for @bounded-systems/site-mcp. One tag, three
+# registries, one file — and the "one file" is load-bearing, not tidiness.
 #
-# THE CI-CUT PATH DOES NOT COME THROUGH HERE, and cannot race this workflow for
-# the release. A tag pushed by `release-cut` carries GITHUB_TOKEN, and GitHub
-# creates no workflow runs from those events — so this trigger is silent for a
-# dispatched cut, and cut.yml calls release-provenance itself as a dependent job.
-# Exactly one of the two paths ever runs for a given tag, which is what keeps
-# this clear of the #19 immutable-release hazard.
+# ############################################################################
+# # WHY ONE FILE, AND WHY THIS FILENAME.                                     #
+# ############################################################################
 #
-# Pinned to an immutable mint commit SHA — the commit mint v0.7.2 tags. That is
-# the first mint carrying release-cut.yml, release-provenance's `tag` input
-# (mint#38), the changelog-as-annotation fix (mint#42) and --cleanup=verbatim
-# (mint#45); anything earlier gives a release whose notes are a tag name or a
-# heading-less bullet list. Keep this pin, version.yml's and cut.yml's on the
-# same mint — a test asserts they agree.
+# npm's trusted publishing validates the ENTRY workflow's filename, not the file
+# that contains `npm publish`, and a package may have exactly ONE trusted
+# publisher configured. This repo had three registerable entry points —
+# `cut.yml` (dispatch), `publish.yml` (tag push AND dispatch) — so npm would
+# validate a different name depending on how the release started and only one of
+# them could ever be configured. mint#48 prescribes `release.yml` org-wide; see
+# bounded-systems/mint → docs/npm-trusted-publishing.md.
+#
+#   npm form:  bounded-systems / site-mcp / release.yml / npm-publish
+#
+# ############################################################################
+# # THREE DOORS, ONE TAG.                                                    #
+# ############################################################################
+#
+#   workflow_dispatch (expect-version, dry-run)  the release. `cut` calls mint's
+#       release-cut to create the tag in CI, and everything below chains off it.
+#       0.3.0 sat merged, versioned and changelogged while the newest tag was
+#       still v0.2.0 because the last step was `git push origin v0.3.0` from a
+#       checkout and nobody was at one (#33). This is that door.
+#   workflow_dispatch (recover-tag)              RECOVERY for a half-shipped
+#       release: skips the cut and the provenance (both already landed) and
+#       re-runs the three registry publishes against an existing tag. v0.3.0
+#       reached JSR and the GitHub release but not npm or the MCP Registry (#38).
+#   push: tags ["v*"]                            a tag cut from a checkout by
+#       `mint release`.
+#
+# A TAG PUSHED BY CI TRIGGERS NOTHING. GitHub creates no workflow runs from
+# events caused by GITHUB_TOKEN, so the `push: tags` trigger above will NOT fire
+# for the tag `cut` pushes — every job below depends on `cut` rather than
+# waiting to be triggered by it. `resolve` is what joins all three doors into one
+# tag, and every checkout in this file names it. Without that pin a dispatched
+# run verifies, builds and publishes MAIN under a version tag's name (#34).
+#
+# DRY RUN DEFAULTS TO TRUE. npm and the MCP Registry are irreversible and JSR
+# versions are immutable, so verifying is the default and releasing is the
+# explicit act.
+
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      expect-version:
+        description: "Version you expect to cut (e.g. 0.4.0). Fails if the manifests disagree."
+        type: string
+        required: false
+      dry-run:
+        description: "Verify only — run every guard and cut nothing."
+        type: boolean
+        default: true
+      recover-tag:
+        description: "RECOVERY: re-publish this existing tag (e.g. v0.3.0). Skips the cut and the provenance."
+        type: string
+        required: false
 
 permissions:
-  contents: write   # create / upload to the GitHub release
-  id-token: write   # OIDC — cosign keyless signing
+  contents: read
 
 jobs:
-  release:
-    uses: bounded-systems/mint/.github/workflows/release-provenance.yml@44d61e153a0c0bdbe44ce651f8bea4defe8ede51 # mint v0.7.2
+  # Guards, then the tag: reads the version from the manifests, refuses to re-cut
+  # an existing tag, refuses to cut while `.release/` still holds unconsumed
+  # intents, and proves the in-toto Statement is derivable — all before anything
+  # is pushed. Outputs `cut: 'true'` only if a tag actually landed.
+  cut:
+    if: github.event_name == 'workflow_dispatch' && inputs.recover-tag == ''
+    permissions:
+      contents: write # create + push the tag
+    uses: bounded-systems/mint/.github/workflows/release-cut.yml@66e3b42693355c9e7be82b319fb6eb8a838d0bce # mint main @ mint#49
     with:
-      ref: 44d61e153a0c0bdbe44ce651f8bea4defe8ede51
+      ref: 66e3b42693355c9e7be82b319fb6eb8a838d0bce
+      expect-version: ${{ inputs.expect-version }}
+      dry-run: ${{ inputs.dry-run }}
+
+  # ONE tag for all three doors, resolved once, so no job below has to know how
+  # this run started. `!cancelled()` rather than `always()`: `cut` is SKIPPED on
+  # the push and recovery paths, and a plain `needs:` would skip this with it —
+  # but a cancelled run must still stop here.
+  #
+  # This condition is also the dry-run gate: `cut` reports `cut: 'false'` for a
+  # dry run and nothing at all when it failed, so both leave this job skipped and
+  # every publish below with it.
+  resolve:
+    needs: [cut]
+    if: ${{ !cancelled() && (github.event_name == 'push' || inputs.recover-tag != '' || needs.cut.outputs.cut == 'true') }}
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Resolve the tag
+        id: tag
+        env:
+          RECOVER: ${{ inputs.recover-tag }}
+          CUT_TAG: ${{ needs.cut.outputs.tag }}
+          REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # On a dispatch, $REF is the BRANCH. The v-shape check is what stops a
+          # branch name reaching a job that would publish under it.
+          tag="${RECOVER:-${CUT_TAG:-$REF}}"
+          case "$tag" in
+            v[0-9]*) ;;
+            *) echo "::error::'$tag' is not a v<version> tag — refusing to release a branch"; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "releasing $tag"
+
+  # ---------------------------------------------------------------------------
+  # Gate: all four version sources must agree before anything is published.
+  # ---------------------------------------------------------------------------
+  verify:
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - name: Versions must match (package.json == deno.json == server.json == tag)
+        run: |
+          set -euo pipefail
+          pkg=$(jq -r .version package.json)
+          deno=$(jq -r .version deno.json)
+          srv=$(jq -r .version server.json)
+          # server.json carries the version TWICE: its own, and the npm version the
+          # MCP Registry entry tells clients to install. Only the first was checked,
+          # so a release could ship a 0.3.0 registry entry pointing at 0.2.0 on npm —
+          # silently serving the previous build to every client that found it there.
+          srvpkg=$(jq -r '.packages[0].version' server.json)
+          tag="${TAG#v}"
+          echo "package.json=$pkg deno.json=$deno server.json=$srv server.json:packages[0]=$srvpkg tag=$tag"
+          if [ "$pkg" != "$deno" ] || [ "$pkg" != "$srv" ] || [ "$pkg" != "$srvpkg" ] || [ "$pkg" != "$tag" ]; then
+            echo "::error::version mismatch — keep package.json, deno.json, server.json (both version fields) and the v<version> tag in sync"
+            exit 1
+          fi
+
+  # The signed in-toto release Statement, attached to the GitHub release. Skipped
+  # on the recovery path: that tag's release already exists, and a published
+  # GitHub release is immutable — re-running this would go red for a step that
+  # had in fact succeeded (mint#19).
+  provenance:
+    needs: [resolve, verify]
+    if: ${{ inputs.recover-tag == '' }}
+    permissions:
+      contents: write # create / upload to the GitHub release
+      id-token: write # OIDC — cosign keyless signing
+      # Not optional, even though this call passes no assets-artifact. GitHub
+      # validates a called workflow's permission requests as the UNION of its
+      # permissions block AT LOAD TIME — before any `if:`, and without regard to
+      # which steps actually run. release-provenance.yml asks for actions: read
+      # (for `gh run download`), so a caller that withholds it fails the whole
+      # run with a startup_failure and no job ever starts.
+      actions: read
+    uses: bounded-systems/mint/.github/workflows/release-provenance.yml@66e3b42693355c9e7be82b319fb6eb8a838d0bce # mint main @ mint#49
+    with:
+      ref: 66e3b42693355c9e7be82b319fb6eb8a838d0bce
+      tag: ${{ needs.resolve.outputs.tag }}
+
+  # ---------------------------------------------------------------------------
+  # 1. npm — mint's reusable lane (mint#48). It owns the npm >= 11.5.1 / node >=
+  #    22.14.0 floors (asserted, never installed — `npm install -g npm@latest` is
+  #    what killed the v0.3.0 publish), package-manager-cache: false, the
+  #    tag-pinned checkout, the idempotence probe, and --provenance over OIDC.
+  #    The `npm-publish` environment is what npm's trusted-publisher Environment
+  #    field pins; add a required reviewer to it to gate releases on approval.
+  # ---------------------------------------------------------------------------
+  npm:
+    needs: [resolve, verify]
+    permissions:
+      contents: read
+      id-token: write # mint the OIDC token npm exchanges for publish auth
+    uses: bounded-systems/mint/.github/workflows/npm-publish.yml@66e3b42693355c9e7be82b319fb6eb8a838d0bce # mint main @ mint#49
+    with:
+      tag: ${{ needs.resolve.outputs.tag }}
+      environment: npm-publish
+      build: npm run build
+      test: npm test
+
+  # ---------------------------------------------------------------------------
+  # 2. JSR — tokenless OIDC publish. Mirrors the npm release (same version).
+  #    JSR publishes the built `dist/` entry; the JS entrypoint needs
+  #    --allow-slow-types.
+  # ---------------------------------------------------------------------------
+  jsr:
+    needs: [resolve, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # tokenless OIDC publish to JSR
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (deno.json exports ./dist/index.js)
+        run: npm run build
+
+      # Same idempotence as the npm lane, and here it is load-bearing rather than
+      # tidy: JSR versions are IMMUTABLE. v0.3.0 reached JSR while the npm job was
+      # failing, so a recovery run that re-attempted this would go red on a
+      # release that had in fact succeeded.
+      - name: Already on JSR?
+        id: onjsr
+        run: |
+          set -euo pipefail
+          pkg=$(jq -r .name deno.json)     # @scope/name
+          version=$(jq -r .version deno.json)
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "https://jsr.io/${pkg}/${version}_meta.json")
+          if [ "$code" = "200" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::JSR already has $pkg@$version — skipping the publish"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to JSR (OIDC)
+        if: steps.onjsr.outputs.skip != 'true'
+        run: npx --yes jsr publish --allow-slow-types
+
+  # ---------------------------------------------------------------------------
+  # 3. MCP Registry — GitHub-OIDC namespace auth (io.github.bounded-systems/*).
+  #    Decoupled from the `npm` job: the registry verifies package ownership by
+  #    reading the `mcpName` field of the ALREADY-published npm package, so it
+  #    does not require this run's npm job to succeed.
+  # ---------------------------------------------------------------------------
+  mcp-registry:
+    needs: [resolve, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC -> io.github.bounded-systems/* namespace
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      # No pinnable SHA: the publisher binary must be the LATEST release or the
+      # OIDC audience check fails ("invalid audience"). Hence `releases/latest`.
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Validate server.json against the published schema
+        run: ./mcp-publisher validate ./server.json
+
+      - name: Authenticate (GitHub OIDC; auto-authes io.github.bounded-systems/*)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to the MCP Registry
+        run: ./mcp-publisher publish

@@ -13,6 +13,6 @@ permissions:
 
 jobs:
   version:
-    uses: bounded-systems/mint/.github/workflows/version.yml@44d61e153a0c0bdbe44ce651f8bea4defe8ede51 # mint v0.7.2
+    uses: bounded-systems/mint/.github/workflows/version.yml@66e3b42693355c9e7be82b319fb6eb8a838d0bce # mint main @ mint#49
     with:
-      ref: 44d61e153a0c0bdbe44ce651f8bea4defe8ede51
+      ref: 66e3b42693355c9e7be82b319fb6eb8a838d0bce
