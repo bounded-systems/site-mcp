@@ -118,6 +118,19 @@ jobs:
   # ---------------------------------------------------------------------------
   verify:
     needs: resolve
+    # A STATUS FUNCTION IS MANDATORY ON EVERY JOB DOWNSTREAM OF `cut`.
+    #
+    # GitHub propagates a skip through the entire `needs` closure, not just one
+    # hop: `cut` is SKIPPED on the tag-push and recovery doors, and every job
+    # that transitively needs it is skipped too — unless that job ITSELF uses a
+    # status function. `resolve`'s `!cancelled()` clears the taint for `resolve`
+    # and for nothing else.
+    #
+    # Without this line the recovery door resolved the tag and skipped all five
+    # jobs below it, reporting SUCCESS having published nothing — and a dry run
+    # cannot tell that apart from correct behaviour, because a dry run skips
+    # those same jobs on purpose.
+    if: ${{ !cancelled() && needs.resolve.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -153,7 +166,7 @@ jobs:
   # had in fact succeeded (mint#19).
   provenance:
     needs: [resolve, verify]
-    if: ${{ inputs.recover-tag == '' }}
+    if: ${{ !cancelled() && needs.verify.result == 'success' && inputs.recover-tag == '' }}
     permissions:
       contents: write # create / upload to the GitHub release
       id-token: write # OIDC — cosign keyless signing
@@ -179,6 +192,8 @@ jobs:
   # ---------------------------------------------------------------------------
   npm:
     needs: [resolve, verify]
+    # Status function mandatory — see the `verify` job's comment.
+    if: ${{ !cancelled() && needs.verify.result == 'success' }}
     permissions:
       contents: read
       id-token: write # mint the OIDC token npm exchanges for publish auth
@@ -196,6 +211,8 @@ jobs:
   # ---------------------------------------------------------------------------
   jsr:
     needs: [resolve, verify]
+    # Status function mandatory — see the `verify` job's comment.
+    if: ${{ !cancelled() && needs.verify.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -248,6 +265,8 @@ jobs:
   # ---------------------------------------------------------------------------
   mcp-registry:
     needs: [resolve, verify]
+    # Status function mandatory — see the `verify` job's comment.
+    if: ${{ !cancelled() && needs.verify.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
