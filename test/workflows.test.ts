@@ -206,3 +206,18 @@ test("publish.yml skips a registry that already has this version", () => {
     );
   }
 });
+
+// The standalone dispatch is the recovery door for a half-shipped release, and
+// a dispatch runs on a BRANCH. Without a tag input every job checks out main and
+// publishes whatever has landed there since, under the version tag's name — the
+// same defect every checkout in this file is pinned against, arriving through
+// the one trigger that was left without a way to say which tag it means.
+test("publish.yml's workflow_dispatch can target a tag", () => {
+  const publish = code(wf("publish.yml"));
+  const dispatch = publish.slice(
+    publish.indexOf("workflow_dispatch:"),
+    publish.indexOf("workflow_call:"),
+  );
+  assert.match(dispatch, /inputs:/, "workflow_dispatch must accept inputs");
+  assert.match(dispatch, /tag:/, "workflow_dispatch must accept a tag to publish");
+});
