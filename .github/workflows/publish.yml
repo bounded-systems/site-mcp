@@ -100,11 +100,45 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Ensure npm >= 11.5
-        run: npm install -g npm@latest
+      # ASSERT, DO NOT MUTATE. This was `npm install -g npm@latest`, and that
+      # unpinned upgrade is what broke the v0.3.0 release: a newer npm disables
+      # remote-tarball dependencies by default, and this lockfile resolves the
+      # JSR npm-compat deps to https://npm.jsr.io/... tarballs, so `npm ci` died
+      # with EALLOWREMOTE before anything was published.
+      #
+      # The step was also unnecessary — setup-node's Node 24 already ships npm
+      # 11.17.0, well past the 11.5 that trusted publishing needs. So the fix is
+      # to check the floor and fail loudly if a future runner drops below it,
+      # rather than pulling an unreviewed npm into the release path.
+      - name: Assert npm >= 11.5 (trusted publishing)
+        run: |
+          set -euo pipefail
+          have=$(npm --version)
+          echo "npm $have"
+          if [ "$(printf '%s\n11.5.0\n' "$have" | sort -V | head -1)" != "11.5.0" ]; then
+            echo "::error::npm $have is below 11.5, which trusted publishing requires." \
+                 "Raise node-version rather than installing npm globally here."
+            exit 1
+          fi
 
       - name: Install dependencies
         run: npm ci
+
+      # Idempotent. A partial release has to be recoverable by re-dispatching
+      # this workflow, and npm refuses to republish an existing version — so on
+      # a recovery run the already-published registry is a SKIP, not a failure.
+      - name: Already on npm?
+        id: onnpm
+        run: |
+          set -euo pipefail
+          name=$(jq -r .name package.json)
+          version=$(jq -r .version package.json)
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::npm already has $name@$version — skipping the publish"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build
         run: npm run build
@@ -115,6 +149,7 @@ jobs:
       # No NPM_TOKEN: npm performs the OIDC exchange with the trusted-publisher
       # endpoint and attaches provenance automatically.
       - name: Publish to npm (trusted publishing + provenance)
+        if: steps.onnpm.outputs.skip != 'true'
         run: npm publish --provenance --access public
 
   # ---------------------------------------------------------------------------
@@ -145,7 +180,27 @@ jobs:
       - name: Build (deno.json exports ./dist/index.js)
         run: npm run build
 
+      # Same idempotence, and here it is load-bearing rather than tidy: JSR
+      # versions are IMMUTABLE. v0.3.0 reached JSR while the npm job was failing,
+      # so a recovery dispatch that re-attempted this would go red on a release
+      # that had in fact succeeded — reporting failure for the one registry that
+      # worked.
+      - name: Already on JSR?
+        id: onjsr
+        run: |
+          set -euo pipefail
+          pkg=$(jq -r .name deno.json)     # @scope/name
+          version=$(jq -r .version deno.json)
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "https://jsr.io/${pkg}/${version}_meta.json")
+          if [ "$code" = "200" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::JSR already has $pkg@$version — skipping the publish"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to JSR (OIDC)
+        if: steps.onjsr.outputs.skip != 'true'
         run: npx --yes jsr publish --allow-slow-types
 
   # ---------------------------------------------------------------------------
