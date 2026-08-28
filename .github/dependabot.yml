@@ -62,3 +62,51 @@ updates:
           - "*"
     commit-message:
       prefix: "ci"
+
+  # ── npm: the lockfile ecosystem (site-mcp#27) ────────────────────────────────
+  #
+  # WHY THIS ENTRY EXISTS
+  # ---------------------
+  # `deps / osv-scan` is hard-fail here, and deps.yml's weekly rescan exists
+  # precisely to catch advisories published against a lock that is not changing.
+  # It worked — and that is what #27 recorded. The lane reported red on `main`
+  # every Tuesday from 2026-08-04 for two and a half cycles, into a branch nobody
+  # was watching, and it surfaced only because an unrelated PR (#26, whose diff
+  # touches no dependency file) happened to run it. The scan did its job; the
+  # NOTICING did not. A scheduled hard-fail lane with no notification path
+  # reports only to whoever happens to open a PR.
+  #
+  # Dependabot is that notification path, on the same argument the
+  # `github-actions` entry above already makes: a GitHub-maintained engine, no
+  # new credential, and — the part that matters here — an advisory arrives as a
+  # proposed lockfile diff in the ordinary review surface instead of as a check
+  # that has been failing since a date nobody noticed.
+  #
+  # MONDAY IS LOAD-BEARING
+  # ----------------------
+  # One day before deps.yml's Tuesday rescan (`cron: "23 7 * * 2"`). The bump PR
+  # exists BEFORE the lane would go red on the advisory it fixes, so the ordinary
+  # path back to green is merging an already-open PR rather than diagnosing a
+  # scheduled failure after the fact. It shares the actions entry's Monday too,
+  # so this repo produces at most two dependency PRs a week, arriving together.
+  #
+  # Grouped for the reason the actions entry is grouped: one PR per week, not a
+  # noise machine nobody reads. The eight advisories #27 was filed over were all
+  # transitive and all cleared inside ranges package.json already declared —
+  # exactly the case a single grouped lockfile PR serves best.
+  #
+  # `deps` prefix, not `ci`: this is dependency movement, not CI configuration,
+  # and unlike the case the header warns about there is no semantic-PR gate in
+  # this repo — its own history carries `deps: relock fast-uri, hono and
+  # ip-address` (7603e2a, #28), the PR that cleared those same eight advisories.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      npm:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps"
