@@ -4,6 +4,11 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
+    // TypeScript 7 no longer pulls every node_modules/@types package into the
+    // global scope implicitly, so the Node ambient types (process, console, URL,
+    // the NodeJS namespace) have to be named. Listing them is also tighter than
+    // the old implicit behaviour: only the types we actually depend on are global.
+    "types": ["node"],
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,
