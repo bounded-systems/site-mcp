@@ -74,9 +74,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.recover-tag == ''
     permissions:
       contents: write # create + push the tag
-    uses: bounded-systems/mint/.github/workflows/release-cut.yml@10949f31af0fda1a97cfe4db719a0b883ad840d0 # mint main @ mint#54
+    uses: bounded-systems/mint/.github/workflows/release-cut.yml@b2d319d8e8eacbd80a3cb849daf7a53aa88802ee # mint main @ mint#54
     with:
-      ref: 10949f31af0fda1a97cfe4db719a0b883ad840d0
+      ref: b2d319d8e8eacbd80a3cb849daf7a53aa88802ee
       expect-version: ${{ inputs.expect-version }}
       dry-run: ${{ inputs.dry-run }}
 
@@ -177,9 +177,9 @@ jobs:
       # (for `gh run download`), so a caller that withholds it fails the whole
       # run with a startup_failure and no job ever starts.
       actions: read
-    uses: bounded-systems/mint/.github/workflows/release-provenance.yml@10949f31af0fda1a97cfe4db719a0b883ad840d0 # mint main @ mint#54
+    uses: bounded-systems/mint/.github/workflows/release-provenance.yml@b2d319d8e8eacbd80a3cb849daf7a53aa88802ee # mint main @ mint#54
     with:
-      ref: 10949f31af0fda1a97cfe4db719a0b883ad840d0
+      ref: b2d319d8e8eacbd80a3cb849daf7a53aa88802ee
       tag: ${{ needs.resolve.outputs.tag }}
 
   # ---------------------------------------------------------------------------
@@ -203,7 +203,7 @@ jobs:
       # with the caller's at LOAD time — withholding this fails the whole run
       # with startup_failure: no job, no log, nothing to point at (#36).
       actions: read
-    uses: bounded-systems/mint/.github/workflows/npm-publish.yml@10949f31af0fda1a97cfe4db719a0b883ad840d0 # mint main @ mint#54
+    uses: bounded-systems/mint/.github/workflows/npm-publish.yml@b2d319d8e8eacbd80a3cb849daf7a53aa88802ee # mint main @ mint#54
     with:
       tag: ${{ needs.resolve.outputs.tag }}
       environment: npm-publish
